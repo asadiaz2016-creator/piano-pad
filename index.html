@@ -34,6 +34,13 @@
   .key.b{background:var(--black);height:128px;z-index:2}
   .key.w.on{background:var(--accent)} .key.b.on{background:#a8741b}
   .hint{color:var(--muted);font-size:.78rem;text-align:center;max-width:720px;line-height:1.6}
+  .slots{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  .slots button{min-height:54px;font-size:.95rem;font-weight:500;line-height:1.2;padding:8px 10px;text-align:center;position:relative}
+  .slots button small{display:block;color:var(--muted);font-weight:400;font-size:.68rem;margin-top:2px}
+  .slots button.cur{border-color:var(--accent);background:#3a2f22}
+  .srow{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  body.saving #saveMode{border-color:var(--accent);background:#5a3f12;color:#fff}
+  body.saving .slots button{border-style:dashed;border-color:var(--accent)}
   kbd{background:#2d2622;border-radius:4px;padding:1px 6px;font-size:.75rem}
 </style>
 </head>
@@ -45,6 +52,15 @@
   </div>
 
   <div class="panels">
+    <div class="panel" style="flex-basis:100%">
+      <h2>Mis combinaciones</h2>
+      <div class="slots" id="slotRow"></div>
+      <div class="srow">
+        <button id="saveMode">💾 Guardar el sonido actual en un botón</button>
+        <button id="resetScenes">Restaurar originales</button>
+      </div>
+      <div class="hint" id="sceneHint" style="text-align:left;margin-top:8px">Toca un botón para cambiar todo el sonido (también con las teclas 1 a 6). Para guardar el tuyo: ajusta el sonido, toca “Guardar” y luego el botón donde lo quieres.</div>
+    </div>
     <div class="panel">
       <h2>Piano</h2>
       <div class="row">
@@ -366,6 +382,58 @@ const _build=buildAudio;
 buildAudio=function(){ _build(); ['bright','rel','atk','flt','rev','vol'].forEach(id=>$(id).dispatchEvent(new Event('input'))); };
 /* start loading samples after first click/key anywhere */
 ['pointerdown','keydown'].forEach(ev=>addEventListener(ev,()=>ensureStarted(),{once:true}));
+
+/* ---------- scenes (favorite combinations) ---------- */
+const SCENE_KEY='pianopad.scenes.v1';
+const BASE={inst:'grand',nord:'natural',orgPre:'full',piano:'85',bright:'70',rel:'10',padType:'cálido',pad:'45',atk:'12',flt:'45',padOct:'-12',rev:'30',vol:'75',oct:'3',padOn:true};
+const mk=(name,o)=>({name,v:{...BASE,...o}});
+const ORIGINALS=[
+  mk('Adoración suave',{nord:'warm',bright:'55',rel:'15',padType:'cuerdas',pad:'40',atk:'25',flt:'50',rev:'45'}),
+  mk('Alabanza brillante',{nord:'bright',bright:'75',rel:'8',padType:'shimmer',pad:'30',atk:'15',flt:'55',padOct:'0',rev:'35'}),
+  mk('Piano solo',{bright:'65',rel:'12',padOn:false}),
+  mk('Rhodes + pad',{inst:'synth_rhodes',padType:'cálido',pad:'35',atk:'20',rev:'40'}),
+  mk('Órgano gospel',{inst:'synth_organ',orgPre:'gospel',padOn:false}),
+  mk('Pad solo',{piano:'0',padType:'cuerdas',pad:'70',atk:'30',flt:'55',rev:'50'})
+];
+let scenes, curScene=-1;
+try{ scenes=JSON.parse(localStorage.getItem(SCENE_KEY)); }catch(e){}
+if(!Array.isArray(scenes)||scenes.length!==6) scenes=JSON.parse(JSON.stringify(ORIGINALS));
+const saveScenes=()=>{ try{ localStorage.setItem(SCENE_KEY,JSON.stringify(scenes)); }catch(e){} };
+const CTRLS=['inst','nord','orgPre','piano','bright','rel','padType','pad','atk','flt','padOct','rev','vol','oct'];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function capture(){ const v={}; CTRLS.forEach(id=>v[id]=$(id).value); v.padOn=S.padOn; return v; }
+function renderScenes(){
+  const row=$('slotRow'); row.innerHTML='';
+  scenes.forEach((sc,i)=>{
+    const b=document.createElement('button'); b.className=i===curScene?'cur':'';
+    const label=$('inst').querySelector(`option[value="${sc.v.inst}"]`)?.textContent.replace(/\s*\(.*$/,'')||'';
+    b.innerHTML=`${i+1}. ${sc.name.replace(/</g,'&lt;')}<small>${label}${sc.v.padOn?' + pad':''}</small>`;
+    b.addEventListener('click',()=>onSlot(i)); row.appendChild(b);
+  });
+}
+async function applyScene(i){
+  const v=scenes[i].v; curScene=i; renderScenes();
+  await ensureStarted(); while(!padSynth) await sleep(50);
+  CTRLS.forEach(id=>{ if(id!=='inst') $(id).value=v[id]; });
+  CTRLS.forEach(id=>{ if(id!=='inst') $(id).dispatchEvent(new Event($(id).tagName==='SELECT'?'change':'input')); });
+  if(S.padOn!==v.padOn) $('padOn').click();
+  $('inst').value=v.inst; $('inst').dispatchEvent(new Event('change'));
+}
+function onSlot(i){
+  if(document.body.classList.contains('saving')){
+    const name=prompt('Nombre para esta combinación:',scenes[i].name);
+    document.body.classList.remove('saving'); $('saveMode').textContent='💾 Guardar el sonido actual en un botón';
+    if(name===null) return;
+    scenes[i]={name:name.trim()||scenes[i].name, v:capture()}; curScene=i; saveScenes(); renderScenes();
+  } else applyScene(i);
+}
+$('saveMode').addEventListener('click',()=>{
+  const on=document.body.classList.toggle('saving');
+  $('saveMode').textContent=on?'Toca el botón donde quieres guardar (o toca aquí para cancelar)':'💾 Guardar el sonido actual en un botón';
+});
+$('resetScenes').addEventListener('click',()=>{ if(confirm('¿Restaurar los 6 botones originales? Se borrarán tus combinaciones guardadas.')){ scenes=JSON.parse(JSON.stringify(ORIGINALS)); curScene=-1; saveScenes(); renderScenes(); } });
+addEventListener('keydown',e=>{ if(/^[1-6]$/.test(e.key)&&!e.metaKey&&!e.ctrlKey&&!['SELECT','INPUT'].includes(e.target.tagName)) applyScene(+e.key-1); });
+renderScenes();
 
 /* ---------- MIDI ---------- */
 if(navigator.requestMIDIAccess){
