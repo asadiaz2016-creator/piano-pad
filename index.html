@@ -152,6 +152,8 @@
   </div>
 
 <script>
+// lowest-latency audio: Tone.js adds a 100 ms look-ahead by default, which is very noticeable when playing live
+Tone.setContext(new Tone.Context({latencyHint:'interactive', lookAhead:0}));
 const FIRST=36, LAST=96;
 const S={sustain:false, padOn:true, padShift:0, baseOct:3, pianoLevel:.85, padLevel:.45};
 let nordEQ, nordComp, nordDrive, keysTremolo, keySynths={}, curInst='grand', padFormant, padShimmer, shimmerGain;
@@ -188,7 +190,6 @@ function buildAudio(){
   padFilter = new Tone.Filter(1800,'lowpass',-24).connect(padFormant);
   shimmerGain = new Tone.Gain(0).connect(reverb);
   padShimmer = new Tone.PitchShift({pitch:12, wet:1}).connect(shimmerGain);
-  padFilter.connect(padShimmer);
   padSynth = new Tone.PolySynth(Tone.Synth, {maxPolyphony:24,
     oscillator:{type:'fatsawtooth', count:3, spread:28},
     envelope:{attack:1.2, decay:.6, sustain:.85, release:2.8}
@@ -373,7 +374,7 @@ $('nord').addEventListener('change',async e=>{ await ensureStarted(); applyNord(
 $('orgPre').addEventListener('change',async e=>{ await ensureStarted(); keySynths.synth_organ.set({oscillator:{type:'custom',partials:drawbarPartials(e.target.value)}}); });
 $('oct').addEventListener('change',e=>S.baseOct=+e.target.value);
 $('padOct').addEventListener('change',e=>S.padShift=+e.target.value);
-$('padType').addEventListener('change',e=>{ const p=PADS[e.target.value]; padCutBase=p.cut; padSynth.set({oscillator:{type:p.type,count:p.count,spread:p.spread}}); padFormant.gain.rampTo(p.formant?9:0,.2); shimmerGain.gain.rampTo(p.shimmer?.45:0,.3); padFilter.frequency.rampTo(cutoff(+$('flt').value),.1); });
+$('padType').addEventListener('change',e=>{ const p=PADS[e.target.value]; padCutBase=p.cut; padSynth.set({oscillator:{type:p.type,count:p.count,spread:p.spread}}); padFormant.gain.rampTo(p.formant?9:0,.2); shimmerGain.gain.rampTo(p.shimmer?.45:0,.3); try{ padFilter.disconnect(padShimmer); }catch(_){} if(p.shimmer) padFilter.connect(padShimmer); padFilter.frequency.rampTo(cutoff(+$('flt').value),.1); });
 $('padOn').addEventListener('click',e=>{ S.padOn=!S.padOn; e.target.textContent=S.padOn?'Activado':'Apagado'; if(!S.padOn&&padSynth) padSynth.releaseAll(); });
 $('pedal').addEventListener('pointerdown',()=>setSustain(!S.sustain));
 
