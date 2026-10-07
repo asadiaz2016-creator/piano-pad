@@ -266,7 +266,11 @@ function applyNord(name){
   nordEQ.low.value=n.eq[0]; nordEQ.mid.value=n.eq[1]; nordEQ.high.value=n.eq[2];
   nordComp.threshold.value=n.comp[0]; nordComp.ratio.value=n.comp[1]; nordDrive.wet.value=n.wet;
 }
-async function ensureStarted(){ if(started) return; started=true; await Tone.start(); buildAudio(); }
+// Tone.start() resumes the *default* context, not the low-latency one we created, so resume ours explicitly (required by iOS)
+const wake=()=>{ const c=Tone.getContext(); return c.state==='running'?Promise.resolve():c.resume(); };
+async function ensureStarted(){ if(started) return; started=true; await wake(); await Tone.start().catch(()=>{}); buildAudio(); }
+// iOS can suspend audio again (screen lock, app switch): wake it on any touch/key
+['pointerdown','keydown','touchend'].forEach(ev=>addEventListener(ev,()=>{ if(started) wake(); },true));
 
 const nameOf = m => Tone.Frequency(m,'midi').toNote();
 const active=new Map(), sustained=new Set();
