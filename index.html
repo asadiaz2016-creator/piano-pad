@@ -62,13 +62,29 @@
               <option value="electric_piano_2">Piano eléctrico FM (tipo DX7)</option>
               <option value="clavinet">Clavinet</option>
             </optgroup>
-            <optgroup label="Otros teclados">
-              <option value="harpsichord">Clavecín</option>
-              <option value="celesta">Celesta</option>
-              <option value="music_box">Caja de música</option>
-              <option value="vibraphone">Vibráfono</option>
-              <option value="church_organ">Órgano de iglesia</option>
+            <optgroup label="Teclados sintetizados (creados por código)">
+              <option value="synth_rhodes">Rhodes sintetizado</option>
+              <option value="synth_wurli">Wurlitzer sintetizado</option>
+              <option value="synth_organ">Órgano B3 sintetizado</option>
             </optgroup>
+            <optgroup label="Otros">
+              <option value="church_organ">Órgano de iglesia (muestras)</option>
+            </optgroup>
+          </select>
+        </label>
+        <label>Carácter del sonido
+          <select id="nord">
+            <option value="natural">Natural</option>
+            <option value="bright">Estilo Nord (brillante, con ataque)</option>
+            <option value="warm">Estilo Nord (cálido, con cuerpo)</option>
+          </select>
+        </label>
+        <label>Registro del órgano B3
+          <select id="orgPre">
+            <option value="full">Lleno (888888888)</option>
+            <option value="jimmy">Jazz (888000000)</option>
+            <option value="gospel">Gospel (888600000)</option>
+            <option value="soft">Suave (006800000)</option>
           </select>
         </label>
         <label><span>Nivel <b id="vPiano"></b></span><input id="piano" type="range" min="0" max="100" value="85"></label>
@@ -81,7 +97,10 @@
       <div class="row">
         <label>Timbre
           <select id="padType">
-            <option value="cálido">Cálido (cuerdas)</option>
+            <option value="cálido">Cálido (suave)</option>
+            <option value="cuerdas">Cuerdas</option>
+            <option value="coro">Coro (aah)</option>
+            <option value="shimmer">Shimmer (brillante, con octava arriba)</option>
             <option value="etéreo">Etéreo (aire)</option>
             <option value="oscuro">Oscuro (profundo)</option>
           </select>
@@ -119,6 +138,7 @@
 <script>
 const FIRST=36, LAST=96;
 const S={sustain:false, padOn:true, padShift:0, baseOct:3, pianoLevel:.85, padLevel:.45};
+let nordEQ, nordComp, nordDrive, keysTremolo, keySynths={}, curInst='grand', padFormant, padShimmer, shimmerGain;
 let started=false, sampler, padSynth, padFilter, padChorus, pianoFilter, pianoGain, padGain, reverb, master;
 
 /* ---------- audio graph ---------- */
@@ -129,11 +149,30 @@ function buildAudio(){
   reverb.generate();
 
   pianoFilter = new Tone.Filter(12000,'lowpass').connect(reverb);
-  pianoGain = new Tone.Gain(S.pianoLevel).connect(pianoFilter);
+  nordDrive = new Tone.Distortion({distortion:.1, wet:0}).connect(pianoFilter);
+  nordComp = new Tone.Compressor(0,1).connect(nordDrive);
+  nordEQ = new Tone.EQ3({low:0,mid:0,high:0,lowFrequency:250,highFrequency:3500}).connect(nordComp);
+  pianoGain = new Tone.Gain(S.pianoLevel).connect(nordEQ);
+
+  keysTremolo = new Tone.Tremolo(5,0).start().connect(pianoGain);
+  keySynths = {
+    synth_rhodes: new Tone.PolySynth(Tone.FMSynth,{maxPolyphony:24, harmonicity:1, modulationIndex:3.5, oscillator:{type:'sine'},
+      envelope:{attack:.003,decay:2.2,sustain:.05,release:1.1}, modulation:{type:'sine'}, modulationEnvelope:{attack:.002,decay:.5,sustain:.1,release:.5}}),
+    synth_wurli: new Tone.PolySynth(Tone.FMSynth,{maxPolyphony:24, harmonicity:2, modulationIndex:6, oscillator:{type:'triangle'},
+      envelope:{attack:.004,decay:1.4,sustain:.08,release:.5}, modulation:{type:'square'}, modulationEnvelope:{attack:.002,decay:.25,sustain:.15,release:.3}}),
+    synth_organ: new Tone.PolySynth(Tone.Synth,{maxPolyphony:24, oscillator:{type:'custom',partials:drawbarPartials('full')},
+      envelope:{attack:.006,decay:.05,sustain:1,release:.1}})
+  };
+  keySynths.synth_rhodes.volume.value=-8; keySynths.synth_wurli.volume.value=-10; keySynths.synth_organ.volume.value=-14;
+  Object.values(keySynths).forEach(k=>k.connect(keysTremolo));
 
   padGain = new Tone.Gain(S.padLevel).connect(reverb);
   padChorus = new Tone.Chorus(.4, 3.5, .6).start().connect(padGain);
-  padFilter = new Tone.Filter(1800,'lowpass',-24).connect(padChorus);
+  padFormant = new Tone.Filter({type:'peaking', frequency:900, Q:2.5, gain:0}).connect(padChorus);
+  padFilter = new Tone.Filter(1800,'lowpass',-24).connect(padFormant);
+  shimmerGain = new Tone.Gain(0).connect(reverb);
+  padShimmer = new Tone.PitchShift({pitch:12, wet:1}).connect(shimmerGain);
+  padFilter.connect(padShimmer);
   padSynth = new Tone.PolySynth(Tone.Synth, {maxPolyphony:24,
     oscillator:{type:'fatsawtooth', count:3, spread:28},
     envelope:{attack:1.2, decay:.6, sustain:.85, release:2.8}
@@ -167,15 +206,48 @@ async function selectInstrument(id){
   const token=++instToken;
   const label=$('inst').selectedOptions[0].textContent;
   releaseEverything();
+  if(id.startsWith('synth_')){ curInst=id; configureSynth(id); setLoading(`✓ ${label} listo`,true); return; }
   try{
     if(!samplers[id]){ setLoading(`Cargando ${label}…`); samplers[id]=await buildSoundfontSampler(id); }
     if(token!==instToken) return;            // user picked something else meanwhile
-    sampler=samplers[id]; sampler.release=+$('rel').value/10;
+    sampler=samplers[id]; curInst=id; keysTremolo.depth.value=0; sampler.release=+$('rel').value/10;
     setLoading(`✓ ${label} listo`,true);
-  }catch(err){ setLoading('No se pudo cargar ese instrumento (¿sin internet?)'); $('inst').value=Object.keys(samplers).find(k=>samplers[k]===sampler)||'grand'; }
+  }catch(err){ setLoading('No se pudo cargar ese instrumento (¿sin internet?)'); $('inst').value=curInst; }
 }
 function releaseEverything(){
   [...active.keys()].forEach(m=>releaseVoice(m)); sustained.clear();
+}
+/* ---------- synthesized keyboards ---------- */
+const DRAWBARS={full:[8,8,8,8,8,8,8,8,8], jimmy:[8,8,8,0,0,0,0,0,0], gospel:[8,8,8,6,0,0,0,0,0], soft:[0,0,6,8,0,0,0,0,0]};
+// drawbars 16' 5⅓' 8' 4' 2⅔' 2' 1⅗' 1⅓' 1' as harmonics of the 16' note (played one octave low)
+function drawbarPartials(name){
+  const H=[1,3,2,4,6,8,10,12,16], p=new Array(16).fill(0);
+  DRAWBARS[name].forEach((lv,i)=>{ p[H[i]-1]=lv/8; });
+  return p;
+}
+const SYNTH_FX={synth_rhodes:{rate:4.5,depth:.3,shift:0}, synth_wurli:{rate:5.5,depth:.2,shift:0}, synth_organ:{rate:6.5,depth:.35,shift:-12}};
+const isSynth=()=>curInst.startsWith('synth_');
+function instAttack(m,vel){
+  if(isSynth()){ keySynths[curInst].triggerAttack(nameOf(m+SYNTH_FX[curInst].shift), Tone.now(), vel); }
+  else if(sampler.loaded) sampler.triggerAttack(nameOf(m), Tone.now(), vel);
+}
+function instRelease(m){
+  if(isSynth()) keySynths[curInst].triggerRelease(nameOf(m+SYNTH_FX[curInst].shift), Tone.now());
+  else if(sampler.loaded) sampler.triggerRelease(nameOf(m), Tone.now());
+}
+function configureSynth(id){
+  const f=SYNTH_FX[id]; keysTremolo.frequency.value=f.rate; keysTremolo.depth.value=f.depth;
+  Object.entries(keySynths).forEach(([k,v])=>{ if(k!==id) v.releaseAll(); });
+}
+const NORD={
+  natural:{eq:[0,0,0], comp:[0,1], wet:0},
+  bright:{eq:[-3,1.5,4.5], comp:[-24,3], wet:.14},
+  warm:{eq:[1.5,2,1.5], comp:[-22,2.5], wet:.08}
+};
+function applyNord(name){
+  if(!nordEQ) return; const n=NORD[name];
+  nordEQ.low.value=n.eq[0]; nordEQ.mid.value=n.eq[1]; nordEQ.high.value=n.eq[2];
+  nordComp.threshold.value=n.comp[0]; nordComp.ratio.value=n.comp[1]; nordDrive.wet.value=n.wet;
 }
 async function ensureStarted(){ if(started) return; started=true; await Tone.start(); buildAudio(); }
 
@@ -188,7 +260,7 @@ function noteOn(m,vel=.8){
   if(active.has(m)) hardRelease(m);
   sustained.delete(m);
   const n=nameOf(m);
-  if(sampler.loaded) sampler.triggerAttack(n, Tone.now(), vel);
+  instAttack(m,vel);
   let padNote=null;
   if(S.padOn){ const pm=m+S.padShift; if(pm>=24&&pm<=108){ padNote=nameOf(pm); padSynth.triggerAttack(padNote, Tone.now(), .4+vel*.6); } }
   active.set(m,{down:true,padNote});
@@ -196,7 +268,7 @@ function noteOn(m,vel=.8){
 }
 function releaseVoice(m){
   const v=active.get(m); if(!v) return;
-  if(sampler.loaded) sampler.triggerRelease(nameOf(m), Tone.now());
+  instRelease(m);
   if(v.padNote) padSynth.triggerRelease(v.padNote, Tone.now());
   active.delete(m);
 }
@@ -263,9 +335,12 @@ function syncOct(){ const s=$('oct'); if([...s.options].some(o=>+o.value===S.bas
 const $=id=>document.getElementById(id);
 function bind(id,vid,fn,fmt){ const el=$(id); const u=()=>{ const v=+el.value; $(vid).textContent=fmt(v); fn(v); }; el.addEventListener('input',u); u(); }
 const PADS={
-  'cálido':{type:'fatsawtooth',cut:1800},
-  'etéreo':{type:'fatsine',cut:3500},
-  'oscuro':{type:'fatsquare',cut:900}
+  'cálido':{type:'fatsawtooth',cut:1800,count:3,spread:28},
+  'cuerdas':{type:'fatsawtooth',cut:2600,count:5,spread:36},
+  'coro':{type:'fatsawtooth',cut:2400,count:3,spread:18,formant:true},
+  'shimmer':{type:'fatsine',cut:4500,count:3,spread:20,shimmer:true},
+  'etéreo':{type:'fatsine',cut:3500,count:3,spread:28},
+  'oscuro':{type:'fatsquare',cut:900,count:3,spread:28}
 };
 let padCutBase=1800;
 const cutoff=v=>padCutBase*Math.pow(4,(v-50)/50);
@@ -278,9 +353,11 @@ bind('flt','vFlt',v=>padFilter&&padFilter.frequency.rampTo(cutoff(v),.05),v=>v+'
 bind('rev','vRev',v=>reverb&&(reverb.wet.value=v/100),v=>v+'%');
 bind('vol','vVol',v=>master&&(master.volume.value=Tone.gainToDb(v/100)-3),v=>v+'%');
 $('inst').addEventListener('change',async e=>{ await ensureStarted(); selectInstrument(e.target.value); });
+$('nord').addEventListener('change',async e=>{ await ensureStarted(); applyNord(e.target.value); });
+$('orgPre').addEventListener('change',async e=>{ await ensureStarted(); keySynths.synth_organ.set({oscillator:{type:'custom',partials:drawbarPartials(e.target.value)}}); });
 $('oct').addEventListener('change',e=>S.baseOct=+e.target.value);
 $('padOct').addEventListener('change',e=>S.padShift=+e.target.value);
-$('padType').addEventListener('change',e=>{ const p=PADS[e.target.value]; padCutBase=p.cut; padSynth.set({oscillator:{type:p.type}}); padFilter.frequency.rampTo(cutoff(+$('flt').value),.1); });
+$('padType').addEventListener('change',e=>{ const p=PADS[e.target.value]; padCutBase=p.cut; padSynth.set({oscillator:{type:p.type,count:p.count,spread:p.spread}}); padFormant.gain.rampTo(p.formant?9:0,.2); shimmerGain.gain.rampTo(p.shimmer?.45:0,.3); padFilter.frequency.rampTo(cutoff(+$('flt').value),.1); });
 $('padOn').addEventListener('click',e=>{ S.padOn=!S.padOn; e.target.textContent=S.padOn?'Activado':'Apagado'; if(!S.padOn&&padSynth) padSynth.releaseAll(); });
 $('pedal').addEventListener('pointerdown',()=>setSustain(!S.sustain));
 
