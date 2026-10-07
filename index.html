@@ -48,6 +48,29 @@
     <div class="panel">
       <h2>Piano</h2>
       <div class="row">
+        <label style="grid-column:1/-1">Instrumento
+          <select id="inst">
+            <optgroup label="Pianos acústicos">
+              <option value="grand" selected>Piano de cola (Salamander, el más realista)</option>
+              <option value="acoustic_grand_piano">Piano de cola suave</option>
+              <option value="bright_acoustic_piano">Piano brillante</option>
+              <option value="honkytonk_piano">Honky-tonk (piano de bar)</option>
+            </optgroup>
+            <optgroup label="Pianos eléctricos">
+              <option value="electric_grand_piano">Piano de cola eléctrico</option>
+              <option value="electric_piano_1">Rhodes</option>
+              <option value="electric_piano_2">Piano eléctrico FM (tipo DX7)</option>
+              <option value="clavinet">Clavinet</option>
+            </optgroup>
+            <optgroup label="Otros teclados">
+              <option value="harpsichord">Clavecín</option>
+              <option value="celesta">Celesta</option>
+              <option value="music_box">Caja de música</option>
+              <option value="vibraphone">Vibráfono</option>
+              <option value="church_organ">Órgano de iglesia</option>
+            </optgroup>
+          </select>
+        </label>
         <label><span>Nivel <b id="vPiano"></b></span><input id="piano" type="range" min="0" max="100" value="85"></label>
         <label><span>Brillo <b id="vBright"></b></span><input id="bright" type="range" min="0" max="100" value="70"></label>
         <label><span>Cola (release) <b id="vRel"></b></span><input id="rel" type="range" min="2" max="40" value="10"></label>
@@ -120,10 +143,39 @@ function buildAudio(){
   const urls={}; ['A','C','D#','F#'].forEach(n=>{
     for(let o=0;o<=8;o++){ if((n==='A'&&o<=7)||(n==='C'&&o>=1)||((n==='D#'||n==='F#')&&o>=1&&o<=7)) urls[n+o]=n.replace('#','s')+o+'.mp3'; }
   });
-  sampler = new Tone.Sampler({urls, baseUrl:'https://tonejs.github.io/audio/salamander/', release:1,
-    onload:()=>{ document.getElementById('loading').textContent='✓ Piano listo, ¡a tocar!'; setTimeout(()=>document.getElementById('loading').style.display='none',2500); },
-    onerror:e=>{ document.getElementById('loading').textContent='No se pudieron cargar las muestras (¿sin internet?)'; }
+  sampler = samplers.grand = new Tone.Sampler({urls, baseUrl:'https://tonejs.github.io/audio/salamander/', release:1,
+    onload:()=>{ setLoading('✓ Piano listo, ¡a tocar!',true); },
+    onerror:e=>{ setLoading('No se pudieron cargar las muestras (¿sin internet?)'); }
   }).connect(pianoGain);
+}
+
+/* ---------- more instruments (FluidR3 soundfont, loaded on demand) ---------- */
+const samplers={};
+let instToken=0;
+function setLoading(msg,autoHide){
+  const el=document.getElementById('loading'); el.style.display=''; el.textContent=msg;
+  if(autoHide) setTimeout(()=>{ if(el.textContent===msg) el.style.display='none'; },2500);
+}
+async function buildSoundfontSampler(name){
+  const txt=await (await fetch(`https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/${name}-mp3.js`)).text();
+  const all=JSON.parse(txt.slice(txt.indexOf('{',txt.indexOf('MIDI.Soundfont.'+name)), txt.lastIndexOf('}')+1).replace(/,\s*}$/,'}'));
+  const notes=Object.keys(all).map(k=>({k,m:Tone.Frequency(k).toMidi()})).sort((a,b)=>a.m-b.m);
+  const urls={}; notes.forEach((n,i)=>{ if(i%3===1||i===notes.length-1) urls[n.k]=all[n.k]; }); // every 3rd note; Sampler pitch-shifts the rest
+  return new Promise((res,rej)=>{ const s=new Tone.Sampler({urls,release:1,onload:()=>res(s),onerror:rej}).connect(pianoGain); });
+}
+async function selectInstrument(id){
+  const token=++instToken;
+  const label=$('inst').selectedOptions[0].textContent;
+  releaseEverything();
+  try{
+    if(!samplers[id]){ setLoading(`Cargando ${label}…`); samplers[id]=await buildSoundfontSampler(id); }
+    if(token!==instToken) return;            // user picked something else meanwhile
+    sampler=samplers[id]; sampler.release=+$('rel').value/10;
+    setLoading(`✓ ${label} listo`,true);
+  }catch(err){ setLoading('No se pudo cargar ese instrumento (¿sin internet?)'); $('inst').value=Object.keys(samplers).find(k=>samplers[k]===sampler)||'grand'; }
+}
+function releaseEverything(){
+  [...active.keys()].forEach(m=>releaseVoice(m)); sustained.clear();
 }
 async function ensureStarted(){ if(started) return; started=true; await Tone.start(); buildAudio(); }
 
@@ -225,6 +277,7 @@ bind('atk','vAtk',v=>padSynth&&padSynth.set({envelope:{attack:v/10}}),v=>(v/10).
 bind('flt','vFlt',v=>padFilter&&padFilter.frequency.rampTo(cutoff(v),.05),v=>v+'%');
 bind('rev','vRev',v=>reverb&&(reverb.wet.value=v/100),v=>v+'%');
 bind('vol','vVol',v=>master&&(master.volume.value=Tone.gainToDb(v/100)-3),v=>v+'%');
+$('inst').addEventListener('change',async e=>{ await ensureStarted(); selectInstrument(e.target.value); });
 $('oct').addEventListener('change',e=>S.baseOct=+e.target.value);
 $('padOct').addEventListener('change',e=>S.padShift=+e.target.value);
 $('padType').addEventListener('change',e=>{ const p=PADS[e.target.value]; padCutBase=p.cut; padSynth.set({oscillator:{type:p.type}}); padFilter.frequency.rampTo(cutoff(+$('flt').value),.1); });
