@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Piano + Pad</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#14110f">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+<style>
+  :root{--bg:#14110f;--panel:#201b18;--text:#f1e9df;--muted:#a89a8b;--accent:#d9a441;--pad:#6fb3d9;--white:#f8f4ec;--black:#1b1715}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:24px 16px;gap:18px}
+  h1{margin:0;font-size:1.4rem;font-weight:600;text-align:center}
+  p.sub{margin:4px 0 0;color:var(--muted);font-size:.9rem;text-align:center}
+  .panels{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;width:100%;max-width:980px}
+  .panel{background:var(--panel);border-radius:14px;padding:14px 18px;flex:1 1 300px}
+  .panel h2{margin:0 0 10px;font-size:.8rem;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}
+  .panel.pad h2{color:var(--pad)}
+  .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px 18px}
+  label{display:flex;flex-direction:column;gap:5px;font-size:.78rem;color:var(--muted)}
+  label span b{color:var(--text);font-weight:500;float:right}
+  input[type=range]{accent-color:var(--accent);width:100%}
+  .pad input[type=range]{accent-color:var(--pad)}
+  select,button{background:#2d2622;color:var(--text);border:1px solid #3d342e;border-radius:8px;padding:6px 10px;font:inherit;font-size:.85rem}
+  button{cursor:pointer}button:hover{border-color:var(--accent)}
+  #loading{font-size:.85rem;color:var(--accent)}
+  .wrap{width:100%;max-width:980px;overflow-x:auto;padding-bottom:8px}
+  #keys{position:relative;height:210px;margin:0 auto;user-select:none;touch-action:none}
+  .key{position:absolute;top:0;border:1px solid #000;border-radius:0 0 6px 6px;cursor:pointer;display:flex;align-items:flex-end;justify-content:center;font-size:.65rem;padding-bottom:6px;transition:background .06s}
+  .key.w{background:var(--white);color:#7a6e62;height:210px;z-index:1}
+  .key.b{background:var(--black);height:128px;z-index:2}
+  .key.w.on{background:var(--accent)} .key.b.on{background:#a8741b}
+  .hint{color:var(--muted);font-size:.78rem;text-align:center;max-width:720px;line-height:1.6}
+  kbd{background:#2d2622;border-radius:4px;padding:1px 6px;font-size:.75rem}
+</style>
+</head>
+<body>
+  <div>
+    <h1>🎹 Piano de cola + Pad</h1>
+    <p class="sub">Muestras de piano real (Salamander Grand) combinadas con un pad atmosférico</p>
+    <p class="sub" id="loading">Cargando muestras del piano… (necesita internet, unos segundos)</p>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>Piano</h2>
+      <div class="row">
+        <label><span>Nivel <b id="vPiano"></b></span><input id="piano" type="range" min="0" max="100" value="85"></label>
+        <label><span>Brillo <b id="vBright"></b></span><input id="bright" type="range" min="0" max="100" value="70"></label>
+        <label><span>Cola (release) <b id="vRel"></b></span><input id="rel" type="range" min="2" max="40" value="10"></label>
+      </div>
+    </div>
+    <div class="panel pad">
+      <h2>Pad</h2>
+      <div class="row">
+        <label>Timbre
+          <select id="padType">
+            <option value="cálido">Cálido (cuerdas)</option>
+            <option value="etéreo">Etéreo (aire)</option>
+            <option value="oscuro">Oscuro (profundo)</option>
+          </select>
+        </label>
+        <label><span>Nivel <b id="vPad"></b></span><input id="pad" type="range" min="0" max="100" value="45"></label>
+        <label><span>Ataque <b id="vAtk"></b></span><input id="atk" type="range" min="1" max="60" value="12"></label>
+        <label><span>Filtro <b id="vFlt"></b></span><input id="flt" type="range" min="0" max="100" value="45"></label>
+        <label>Octava del pad
+          <select id="padOct"><option value="-12">−1 octava</option><option value="0">Misma</option><option value="12">+1 octava</option></select>
+        </label>
+        <label>Pad <button id="padOn">Activado</button></label>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>General</h2>
+      <div class="row">
+        <label><span>Reverb <b id="vRev"></b></span><input id="rev" type="range" min="0" max="100" value="30"></label>
+        <label><span>Volumen <b id="vVol"></b></span><input id="vol" type="range" min="0" max="100" value="75"></label>
+        <label>Octava del teclado
+          <select id="oct"><option value="2">C2</option><option value="3" selected>C3</option><option value="4">C4</option></select>
+        </label>
+        <label>Pedal <button id="pedal">Sostenido (Espacio)</button></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap"><div id="keys"></div></div>
+
+  <div class="hint">
+    Teclado: <kbd>A S D F G H J K L Ñ</kbd> teclas blancas · <kbd>W E T Y U O P</kbd> negras ·
+    <kbd>Z</kbd>/<kbd>X</kbd> octava · <kbd>Espacio</kbd> pedal de sostenido.<br>
+    <span id="status">MIDI: buscando…</span>
+  </div>
+
+<script>
+const FIRST=36, LAST=96;
+const S={sustain:false, padOn:true, padShift:0, baseOct:3, pianoLevel:.85, padLevel:.45};
+let started=false, sampler, padSynth, padFilter, padChorus, pianoFilter, pianoGain, padGain, reverb, master;
+
+/* ---------- audio graph ---------- */
+function buildAudio(){
+  master = new Tone.Volume(-6).toDestination();
+  const limiter = new Tone.Limiter(-2).connect(master);
+  reverb = new Tone.Reverb({decay:3.5, preDelay:.02, wet:.3}).connect(limiter);
+  reverb.generate();
+
+  pianoFilter = new Tone.Filter(12000,'lowpass').connect(reverb);
+  pianoGain = new Tone.Gain(S.pianoLevel).connect(pianoFilter);
+
+  padGain = new Tone.Gain(S.padLevel).connect(reverb);
+  padChorus = new Tone.Chorus(.4, 3.5, .6).start().connect(padGain);
+  padFilter = new Tone.Filter(1800,'lowpass',-24).connect(padChorus);
+  padSynth = new Tone.PolySynth(Tone.Synth, {maxPolyphony:24,
+    oscillator:{type:'fatsawtooth', count:3, spread:28},
+    envelope:{attack:1.2, decay:.6, sustain:.85, release:2.8}
+  }).connect(padFilter);
+  padSynth.volume.value=-14;
+
+  const urls={}; ['A','C','D#','F#'].forEach(n=>{
+    for(let o=0;o<=8;o++){ if((n==='A'&&o<=7)||(n==='C'&&o>=1)||((n==='D#'||n==='F#')&&o>=1&&o<=7)) urls[n+o]=n.replace('#','s')+o+'.mp3'; }
+  });
+  sampler = new Tone.Sampler({urls, baseUrl:'https://tonejs.github.io/audio/salamander/', release:1,
+    onload:()=>{ document.getElementById('loading').textContent='✓ Piano listo, ¡a tocar!'; setTimeout(()=>document.getElementById('loading').style.display='none',2500); },
+    onerror:e=>{ document.getElementById('loading').textContent='No se pudieron cargar las muestras (¿sin internet?)'; }
+  }).connect(pianoGain);
+}
+async function ensureStarted(){ if(started) return; started=true; await Tone.start(); buildAudio(); }
+
+const nameOf = m => Tone.Frequency(m,'midi').toNote();
+const active=new Map(), sustained=new Set();
+
+function noteOn(m,vel=.8){
+  if(!started){ ensureStarted().then(()=>noteOn(m,vel)); return; }
+  if(!sampler) return;
+  if(active.has(m)) hardRelease(m);
+  sustained.delete(m);
+  const n=nameOf(m);
+  if(sampler.loaded) sampler.triggerAttack(n, Tone.now(), vel);
+  let padNote=null;
+  if(S.padOn){ const pm=m+S.padShift; if(pm>=24&&pm<=108){ padNote=nameOf(pm); padSynth.triggerAttack(padNote, Tone.now(), .4+vel*.6); } }
+  active.set(m,{down:true,padNote});
+  keyEls[m]?.classList.add('on');
+}
+function releaseVoice(m){
+  const v=active.get(m); if(!v) return;
+  if(sampler.loaded) sampler.triggerRelease(nameOf(m), Tone.now());
+  if(v.padNote) padSynth.triggerRelease(v.padNote, Tone.now());
+  active.delete(m);
+}
+function hardRelease(m){ releaseVoice(m); }
+function noteOff(m){
+  keyEls[m]?.classList.remove('on');
+  const v=active.get(m); if(!v) return;
+  v.down=false;
+  if(S.sustain) sustained.add(m); else releaseVoice(m);
+}
+function setSustain(on){
+  S.sustain=on;
+  document.getElementById('pedal').style.borderColor=on?'var(--accent)':'';
+  if(!on){ [...sustained].forEach(m=>{ if(!active.get(m)?.down) releaseVoice(m); }); sustained.clear(); }
+}
+
+/* ---------- keyboard UI ---------- */
+const keysEl=document.getElementById('keys'), keyEls={};
+const isBlack=m=>[1,3,6,8,10].includes(m%12);
+(function(){
+  let wi=0; const W=44;
+  for(let m=FIRST;m<=LAST;m++){
+    const el=document.createElement('div'); el.dataset.m=m;
+    if(!isBlack(m)){ el.className='key w'; el.style.left=wi*W+'px'; el.style.width=W+'px'; if(m%12===0) el.textContent='C'+(Math.floor(m/12)-1); wi++; }
+    else { el.className='key b'; el.style.left=(wi*W-14)+'px'; el.style.width='28px'; }
+    keysEl.appendChild(el); keyEls[m]=el;
+  }
+  keysEl.style.width=wi*W+'px';
+})();
+const pointers=new Map();
+keysEl.addEventListener('pointerdown',e=>{
+  const k=e.target.closest('.key'); if(!k) return;
+  keysEl.setPointerCapture(e.pointerId);
+  const m=+k.dataset.m; pointers.set(e.pointerId,m);
+  const r=k.getBoundingClientRect(); noteOn(m,.45+Math.min(1,(e.clientY-r.top)/r.height)*.5);
+});
+keysEl.addEventListener('pointermove',e=>{
+  if(!pointers.has(e.pointerId)) return;
+  const el=document.elementFromPoint(e.clientX,e.clientY)?.closest?.('.key'); if(!el) return;
+  const m=+el.dataset.m, prev=pointers.get(e.pointerId);
+  if(m!==prev){ noteOff(prev); pointers.set(e.pointerId,m); noteOn(m,.7); }
+});
+const up=e=>{ if(pointers.has(e.pointerId)){ noteOff(pointers.get(e.pointerId)); pointers.delete(e.pointerId);} };
+keysEl.addEventListener('pointerup',up); keysEl.addEventListener('pointercancel',up);
+
+const KMAP={a:0,w:1,s:2,e:3,d:4,f:5,t:6,g:7,y:8,h:9,u:10,j:11,k:12,o:13,l:14,p:15,'ñ':16,';':16,"'":17};
+const held=new Map();
+addEventListener('keydown',e=>{
+  if(e.repeat||e.metaKey||e.ctrlKey||e.target.tagName==='SELECT') return;
+  const k=e.key.toLowerCase();
+  if(k===' '){ e.preventDefault(); setSustain(true); return; }
+  if(k==='z'){ S.baseOct=Math.max(1,S.baseOct-1); syncOct(); return; }
+  if(k==='x'){ S.baseOct=Math.min(5,S.baseOct+1); syncOct(); return; }
+  if(k in KMAP && !held.has(k)){ const m=(S.baseOct+1)*12+KMAP[k]; if(m>=FIRST&&m<=LAST){ held.set(k,m); noteOn(m,.75);} }
+});
+addEventListener('keyup',e=>{
+  const k=e.key.toLowerCase();
+  if(k===' '){ setSustain(false); return; }
+  if(held.has(k)){ noteOff(held.get(k)); held.delete(k); }
+});
+function syncOct(){ const s=$('oct'); if([...s.options].some(o=>+o.value===S.baseOct)) s.value=S.baseOct; }
+
+/* ---------- controls ---------- */
+const $=id=>document.getElementById(id);
+function bind(id,vid,fn,fmt){ const el=$(id); const u=()=>{ const v=+el.value; $(vid).textContent=fmt(v); fn(v); }; el.addEventListener('input',u); u(); }
+const PADS={
+  'cálido':{type:'fatsawtooth',cut:1800},
+  'etéreo':{type:'fatsine',cut:3500},
+  'oscuro':{type:'fatsquare',cut:900}
+};
+let padCutBase=1800;
+const cutoff=v=>padCutBase*Math.pow(4,(v-50)/50);
+bind('piano','vPiano',v=>{S.pianoLevel=v/100; pianoGain&&(pianoGain.gain.rampTo(v/100,.05));},v=>v+'%');
+bind('bright','vBright',v=>pianoFilter&&pianoFilter.frequency.rampTo(1500*Math.pow(10,v/100*1.0+0)*1.2,.05),v=>v+'%');
+bind('rel','vRel',v=>sampler&&(sampler.release=v/10),v=>(v/10).toFixed(1)+' s');
+bind('pad','vPad',v=>{S.padLevel=v/100; padGain&&padGain.gain.rampTo(v/100,.05);},v=>v+'%');
+bind('atk','vAtk',v=>padSynth&&padSynth.set({envelope:{attack:v/10}}),v=>(v/10).toFixed(1)+' s');
+bind('flt','vFlt',v=>padFilter&&padFilter.frequency.rampTo(cutoff(v),.05),v=>v+'%');
+bind('rev','vRev',v=>reverb&&(reverb.wet.value=v/100),v=>v+'%');
+bind('vol','vVol',v=>master&&(master.volume.value=Tone.gainToDb(v/100)-3),v=>v+'%');
+$('oct').addEventListener('change',e=>S.baseOct=+e.target.value);
+$('padOct').addEventListener('change',e=>S.padShift=+e.target.value);
+$('padType').addEventListener('change',e=>{ const p=PADS[e.target.value]; padCutBase=p.cut; padSynth.set({oscillator:{type:p.type}}); padFilter.frequency.rampTo(cutoff(+$('flt').value),.1); });
+$('padOn').addEventListener('click',e=>{ S.padOn=!S.padOn; e.target.textContent=S.padOn?'Activado':'Apagado'; if(!S.padOn&&padSynth) padSynth.releaseAll(); });
+$('pedal').addEventListener('pointerdown',()=>setSustain(!S.sustain));
+
+/* apply initial control values once the graph exists */
+const _build=buildAudio;
+buildAudio=function(){ _build(); ['bright','rel','atk','flt','rev','vol'].forEach(id=>$(id).dispatchEvent(new Event('input'))); };
+/* start loading samples after first click/key anywhere */
+['pointerdown','keydown'].forEach(ev=>addEventListener(ev,()=>ensureStarted(),{once:true}));
+
+/* ---------- MIDI ---------- */
+if(navigator.requestMIDIAccess){
+  navigator.requestMIDIAccess().then(acc=>{
+    const wire=()=>{ let n=0; acc.inputs.forEach(i=>{ n++; i.onmidimessage=msg=>{
+      const [st,d1,d2]=msg.data, cmd=st&0xf0;
+      if(cmd===0x90&&d2>0){ if(d1>=FIRST&&d1<=LAST) noteOn(d1,d2/127); }
+      else if(cmd===0x80||(cmd===0x90&&d2===0)){ if(d1>=FIRST&&d1<=LAST) noteOff(d1); }
+      else if(cmd===0xB0&&d1===64) setSustain(d2>=64);
+    };});
+      $('status').textContent=n?`MIDI: ${n} dispositivo(s) conectado(s) ✓`:'MIDI: ningún teclado conectado (puedes enchufarlo ahora)';
+    };
+    wire(); acc.onstatechange=wire;
+  }).catch(()=>$('status').textContent='MIDI no disponible (usa el teclado o el mouse)');
+} else $('status').textContent='MIDI no disponible en este navegador (usa Chrome/Edge para MIDI)';
+if('serviceWorker' in navigator) addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+</script>
+</body>
+</html>
