@@ -139,6 +139,13 @@
           <select id="oct"><option value="2">C2</option><option value="3" selected>C3</option><option value="4">C4</option></select>
         </label>
         <label>Pedal <button id="pedal">Sostenido (Espacio)</button></label>
+        <label>Modo de audio
+          <select id="audioMode">
+            <option value="fast">Rápido (menos retraso)</option>
+            <option value="balanced">Equilibrado</option>
+            <option value="stable">Estable (sin cortes)</option>
+          </select>
+        </label>
       </div>
     </div>
   </div>
@@ -153,16 +160,20 @@
 
 <script>
 // lowest-latency audio: Tone.js adds a 100 ms look-ahead by default, which is very noticeable when playing live
-Tone.setContext(new Tone.Context({latencyHint:'interactive', lookAhead:0}));
-const FIRST=36, LAST=96;
+let AUDIO_MODE='fast'; try{ AUDIO_MODE=localStorage.getItem('pianopad.audio')||'fast'; }catch(e){}
+const AUDIO_OPTS={fast:{latencyHint:'interactive',lookAhead:0}, balanced:{latencyHint:'balanced',lookAhead:.01}, stable:{latencyHint:'playback',lookAhead:.03}};
+Tone.setContext(new Tone.Context(AUDIO_OPTS[AUDIO_MODE]||AUDIO_OPTS.fast));
+const FIRST=36, LAST=96;          // on-screen keyboard
+const MIDI_LO=21, MIDI_HI=108;    // full 88-key piano (A0-C8) from MIDI
 const S={sustain:false, padOn:true, padShift:0, baseOct:3, pianoLevel:.85, padLevel:.45};
-let nordEQ, nordComp, nordDrive, keysTremolo, keySynths={}, curInst='grand', padFormant, padShimmer, shimmerGain;
+let padHP, nordEQ, nordComp, nordDrive, keysTremolo, keySynths={}, curInst='grand', padFormant, padShimmer, shimmerGain;
 let started=false, sampler, padSynth, padFilter, padChorus, pianoFilter, pianoGain, padGain, reverb, master;
 
 /* ---------- audio graph ---------- */
 function buildAudio(){
-  master = new Tone.Volume(-6).toDestination();
-  const limiter = new Tone.Limiter(-2).connect(master);
+  master = new Tone.Volume(-8).toDestination();
+  const busLimiter = new Tone.Limiter(-1).connect(master);
+  const limiter = new Tone.Compressor({threshold:-14, ratio:2.5, attack:.02, release:.25, knee:8}).connect(busLimiter);
   reverb = new Tone.Reverb({decay:3.5, preDelay:.02, wet:.3}).connect(limiter);
   reverb.generate();
 
@@ -190,10 +201,11 @@ function buildAudio(){
   padFilter = new Tone.Filter(1800,'lowpass',-24).connect(padFormant);
   shimmerGain = new Tone.Gain(0).connect(reverb);
   padShimmer = new Tone.PitchShift({pitch:12, wet:1}).connect(shimmerGain);
-  padSynth = new Tone.PolySynth(Tone.Synth, {maxPolyphony:24,
+  padHP = new Tone.Filter(110,'highpass',-12).connect(padFilter);
+  padSynth = new Tone.PolySynth(Tone.Synth, {maxPolyphony:16,
     oscillator:{type:'fatsawtooth', count:3, spread:28},
     envelope:{attack:1.2, decay:.6, sustain:.85, release:2.8}
-  }).connect(padFilter);
+  }).connect(padHP);
   padSynth.volume.value=-14;
 
   const urls={}; ['A','C','D#','F#'].forEach(n=>{
@@ -283,7 +295,7 @@ function noteOn(m,vel=.8){
   const n=nameOf(m);
   instAttack(m,vel);
   let padNote=null;
-  if(S.padOn){ const pm=m+S.padShift; if(pm>=24&&pm<=108){ padNote=nameOf(pm); padSynth.triggerAttack(padNote, Tone.now(), .4+vel*.6); } }
+  if(S.padOn){ let pm=m+S.padShift; while(pm<43) pm+=12; if(pm<=108){ padNote=nameOf(pm); padSynth.triggerAttack(padNote, Tone.now(), .4+vel*.6); } }
   active.set(m,{down:true,padNote});
   keyEls[m]?.classList.add('on');
 }
@@ -357,7 +369,7 @@ const $=id=>document.getElementById(id);
 function bind(id,vid,fn,fmt){ const el=$(id); const u=()=>{ const v=+el.value; $(vid).textContent=fmt(v); fn(v); }; el.addEventListener('input',u); u(); }
 const PADS={
   'cálido':{type:'fatsawtooth',cut:1800,count:3,spread:28},
-  'cuerdas':{type:'fatsawtooth',cut:2600,count:5,spread:36},
+  'cuerdas':{type:'fatsawtooth',cut:2600,count:4,spread:36},
   'coro':{type:'fatsawtooth',cut:2400,count:3,spread:18,formant:true},
   'shimmer':{type:'fatsine',cut:4500,count:3,spread:20,shimmer:true},
   'etéreo':{type:'fatsine',cut:3500,count:3,spread:28},
@@ -372,10 +384,12 @@ bind('pad','vPad',v=>{S.padLevel=v/100; padGain&&padGain.gain.rampTo(v/100,.05);
 bind('atk','vAtk',v=>padSynth&&padSynth.set({envelope:{attack:v/10}}),v=>(v/10).toFixed(1)+' s');
 bind('flt','vFlt',v=>padFilter&&padFilter.frequency.rampTo(cutoff(v),.05),v=>v+'%');
 bind('rev','vRev',v=>reverb&&(reverb.wet.value=v/100),v=>v+'%');
-bind('vol','vVol',v=>master&&(master.volume.value=Tone.gainToDb(v/100)-3),v=>v+'%');
+bind('vol','vVol',v=>master&&(master.volume.value=Tone.gainToDb(v/100)-6),v=>v+'%');
 $('inst').addEventListener('change',async e=>{ await ensureStarted(); selectInstrument(e.target.value); });
 $('nord').addEventListener('change',async e=>{ await ensureStarted(); applyNord(e.target.value); });
 $('orgPre').addEventListener('change',async e=>{ await ensureStarted(); keySynths.synth_organ.set({oscillator:{type:'custom',partials:drawbarPartials(e.target.value)}}); });
+$('audioMode').value=AUDIO_MODE;
+$('audioMode').addEventListener('change',e=>{ try{ localStorage.setItem('pianopad.audio',e.target.value); }catch(_){} location.reload(); });
 $('oct').addEventListener('change',e=>S.baseOct=+e.target.value);
 $('padOct').addEventListener('change',e=>S.padShift=+e.target.value);
 $('padType').addEventListener('change',e=>{ const p=PADS[e.target.value]; padCutBase=p.cut; padSynth.set({oscillator:{type:p.type,count:p.count,spread:p.spread}}); padFormant.gain.rampTo(p.formant?9:0,.2); shimmerGain.gain.rampTo(p.shimmer?.45:0,.3); try{ padFilter.disconnect(padShimmer); }catch(_){} if(p.shimmer) padFilter.connect(padShimmer); padFilter.frequency.rampTo(cutoff(+$('flt').value),.1); });
@@ -445,8 +459,8 @@ if(navigator.requestMIDIAccess){
   navigator.requestMIDIAccess().then(acc=>{
     const wire=()=>{ let n=0; acc.inputs.forEach(i=>{ n++; i.onmidimessage=msg=>{
       const [st,d1,d2]=msg.data, cmd=st&0xf0;
-      if(cmd===0x90&&d2>0){ if(d1>=FIRST&&d1<=LAST) noteOn(d1,d2/127); }
-      else if(cmd===0x80||(cmd===0x90&&d2===0)){ if(d1>=FIRST&&d1<=LAST) noteOff(d1); }
+      if(cmd===0x90&&d2>0){ if(d1>=MIDI_LO&&d1<=MIDI_HI) noteOn(d1,d2/127); }
+      else if(cmd===0x80||(cmd===0x90&&d2===0)){ if(d1>=MIDI_LO&&d1<=MIDI_HI) noteOff(d1); }
       else if(cmd===0xB0&&d1===64) setSustain(d2>=64);
     };});
       $('status').textContent=n?`MIDI: ${n} dispositivo(s) conectado(s) ✓`:'MIDI: ningún teclado conectado (puedes enchufarlo ahora)';
