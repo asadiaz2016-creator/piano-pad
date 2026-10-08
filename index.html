@@ -47,7 +47,7 @@
 <body>
   <div>
     <h1>🎹 Piano de cola + Pad</h1>
-    <p class="sub">Muestras de piano real (Salamander Grand) combinadas con un pad atmosférico</p>
+    <p class="sub">Piano de cola Salamander con capas de intensidad, combinado con un pad</p>
     <p class="sub" id="loading">Cargando muestras del piano… (necesita internet, unos segundos)</p>
   </div>
 
@@ -86,6 +86,12 @@
             <optgroup label="Otros">
               <option value="church_organ">Órgano de iglesia (muestras)</option>
             </optgroup>
+          </select>
+        </label>
+        <label>Calidad del piano de cola
+          <select id="pq">
+            <option value="high">Alta (4 capas, ideal iPad y Mac)</option>
+            <option value="light">Ligera (2 capas, ideal iPhone)</option>
           </select>
         </label>
         <label>Carácter del sonido
@@ -208,13 +214,86 @@ function buildAudio(){
   }).connect(padHP);
   padSynth.volume.value=-14;
 
-  const urls={}; ['A','C','D#','F#'].forEach(n=>{
-    for(let o=0;o<=8;o++){ if((n==='A'&&o<=7)||(n==='C'&&o>=1)||((n==='D#'||n==='F#')&&o>=1&&o<=7)) urls[n+o]=n.replace('#','s')+o+'.mp3'; }
-  });
-  sampler = samplers.grand = new Tone.Sampler({urls, baseUrl:'https://tonejs.github.io/audio/salamander/', release:1,
-    onload:()=>{ setLoading('✓ Piano listo, ¡a tocar!',true); },
-    onerror:e=>{ setLoading('No se pudieron cargar las muestras (¿sin internet?)'); }
-  }).connect(pianoGain);
+  sampler = samplers.grand = new LayeredPiano(pianoGain);
+  samplers.grand.load();
+}
+
+/* ---------- Salamander grand with velocity layers ---------- */
+// Samples: Salamander Grand Piano V3 by Alexander Holm (CC-BY 3.0), hosted for the @tonejs/piano project
+const SAL_BASE='https://tambien.github.io/Piano/audio/';
+const SAL_NOTES=[];
+['A','C','D#','F#'].forEach(n=>{ for(let o=0;o<=8;o++){
+  if((n==='A'&&o<=7)||(n==='C'&&o>=1)||((n==='D#'||n==='F#')&&o>=1&&o<=7)) SAL_NOTES.push({tone:n+o, file:n.replace('#','s')+o, midi:Tone.Frequency(n+o).toMidi()});
+}});
+const IS_PHONE=/iPhone|Android.+Mobile/.test(navigator.userAgent);
+let QUALITY=IS_PHONE?'light':'high'; try{ QUALITY=localStorage.getItem('pianopad.quality')||QUALITY; }catch(e){}
+// layers = Salamander velocity files (1 soft .. 16 hard); thr = where each layer starts (0-1 velocity); order = load order (playable after the first)
+const PIANO_Q={ high:{layers:[3,7,11,15], thr:[.35,.6,.82], order:[1,2,0,3]}, light:{layers:[5,11], thr:[.6], order:[0,1]} };
+// samples run 4-25 s; keep them shorter (with a fade) so 4 layers fit in an iPhone/iPad's memory
+const maxSecFor=m=>m<=36?10:m<=60?7:m<=84?5:3.5;
+function trimBuffer(buf,maxSec){
+  if(buf.duration<=maxSec) return buf;
+  const sr=buf.sampleRate, len=Math.floor(maxSec*sr), fade=Math.floor(Math.min(1,maxSec*.25)*sr);
+  const out=Tone.getContext().rawContext.createBuffer(buf.numberOfChannels,len,sr);
+  for(let c=0;c<buf.numberOfChannels;c++){
+    const d=out.getChannelData(c); d.set(buf.getChannelData(c).subarray(0,len));
+    for(let i=len-fade;i<len;i++) d[i]*=(len-i)/fade;
+  }
+  return out;
+}
+async function loadBufferSet(list,onEach){   // list: [toneName, file, maxSec]; 6 downloads at a time
+  const out={}; let next=0, done=0, failed=0;
+  const worker=async()=>{ while(next<list.length){ const [name,file,max]=list[next++];
+    try{ const ab=await (await fetch(SAL_BASE+file)).arrayBuffer();
+         out[name]=trimBuffer(await Tone.getContext().rawContext.decodeAudioData(ab),max); }
+    catch(e){ failed++; }
+    onEach&&onEach(++done,list.length);
+  }};
+  await Promise.all(Array.from({length:6},worker));
+  if(!Object.keys(out).length) throw new Error('no samples');
+  return out;
+}
+class LayeredPiano{
+  constructor(out){ this.out=out; this.cfg=PIANO_Q[QUALITY]||PIANO_Q.high; this.layers=this.cfg.layers.map(v=>({v,s:null}));
+    this.playing=new Map(); this._release=1; this.rel=null; this.pedal={}; }
+  get loaded(){ return this.layers.some(l=>l.s); }
+  get release(){ return this._release; }
+  set release(v){ this._release=v; this.layers.forEach(l=>l.s&&(l.s.release=v)); }
+  pick(vel){
+    let i=this.cfg.thr.findIndex(t=>vel<t); if(i<0) i=this.layers.length-1;
+    for(let d=0;d<this.layers.length;d++) for(const j of [i-d,i+d]) if(this.layers[j]?.s) return this.layers[j].s;
+    return null;
+  }
+  triggerAttack(note,time,vel){
+    const s=this.pick(vel); if(!s) return;
+    const prev=this.playing.get(note); if(prev&&prev!==s) prev.triggerRelease(note,time);
+    s.triggerAttack(note,time,.5+.5*vel); this.playing.set(note,s);
+  }
+  triggerRelease(note,time){
+    const s=this.playing.get(note); if(!s) return;
+    s.triggerRelease(note,time); this.playing.delete(note);
+    if(this.rel) try{ this.rel.triggerAttack(note,time,.7); }catch(e){}   // damper/key-release noise
+  }
+  releaseAll(){ this.layers.forEach(l=>l.s&&l.s.releaseAll()); this.playing.clear(); }
+  pedalSound(on){ const p=on?this.pedal.down:this.pedal.up; if(p&&p.loaded) try{ p.start(Tone.now()); }catch(e){} }
+  async load(){
+    const n=this.layers.length;
+    try{
+      for(let k=0;k<this.cfg.order.length;k++){
+        const L=this.layers[this.cfg.order[k]];
+        const urls=await loadBufferSet(SAL_NOTES.map(x=>[x.tone,`${x.file}v${L.v}.mp3`,maxSecFor(x.midi)]),
+          (d,t)=>{ if(k===0) setLoading(`Cargando piano de cola… ${Math.round(d/t*100)}%`); });
+        L.s=new Tone.Sampler({urls,release:this._release}).connect(this.out);
+        setLoading(k+1<n?`✓ Piano listo · sumando capas de intensidad ${k+1}/${n}…`:`✓ Piano de cola completo (${n} capas de intensidad)`, k+1===n);
+      }
+      const rel={}; for(let m=21;m<=108;m++) rel[nameOf(m)]=[nameOf(m),`rel${m-20}.mp3`,1];
+      const relBufs=await loadBufferSet(Object.values(rel));
+      this.rel=new Tone.Sampler({urls:relBufs,release:.1}).connect(this.out); this.rel.volume.value=-6;
+      const ped=await loadBufferSet([['down','pedalD1.mp3',3],['up','pedalU1.mp3',1]]);
+      this.pedal.down=new Tone.Player(ped.down).connect(this.out); this.pedal.down.volume.value=-14;
+      this.pedal.up=new Tone.Player(ped.up).connect(this.out); this.pedal.up.volume.value=-14;
+    }catch(e){ if(!this.loaded) setLoading('No se pudieron cargar las muestras del piano (¿sin internet?)'); }
+  }
 }
 
 /* ---------- more instruments (FluidR3 soundfont, loaded on demand) ---------- */
@@ -313,6 +392,7 @@ function noteOff(m){
   if(S.sustain) sustained.add(m); else releaseVoice(m);
 }
 function setSustain(on){
+  if(S.sustain!==on && curInst==='grand' && samplers.grand) samplers.grand.pedalSound(on);
   S.sustain=on;
   document.getElementById('pedal').style.borderColor=on?'var(--accent)':'';
   if(!on){ [...sustained].forEach(m=>{ if(!active.get(m)?.down) releaseVoice(m); }); sustained.clear(); }
@@ -388,6 +468,8 @@ bind('vol','vVol',v=>master&&(master.volume.value=Tone.gainToDb(v/100)-6),v=>v+'
 $('inst').addEventListener('change',async e=>{ await ensureStarted(); selectInstrument(e.target.value); });
 $('nord').addEventListener('change',async e=>{ await ensureStarted(); applyNord(e.target.value); });
 $('orgPre').addEventListener('change',async e=>{ await ensureStarted(); keySynths.synth_organ.set({oscillator:{type:'custom',partials:drawbarPartials(e.target.value)}}); });
+$('pq').value=QUALITY;
+$('pq').addEventListener('change',e=>{ try{ localStorage.setItem('pianopad.quality',e.target.value); }catch(_){} location.reload(); });
 $('audioMode').value=AUDIO_MODE;
 $('audioMode').addEventListener('change',e=>{ try{ localStorage.setItem('pianopad.audio',e.target.value); }catch(_){} location.reload(); });
 $('oct').addEventListener('change',e=>S.baseOct=+e.target.value);
